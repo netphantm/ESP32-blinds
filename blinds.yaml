@@ -1,0 +1,181 @@
+esphome:
+  name: esp32-blinds-dining
+
+esp32:
+  variant: ESP32C3
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid_iot
+  password: !secret wifi_password_iot
+  power_save_mode: none
+  manual_ip:
+    static_ip: 192.168.178.121
+    gateway: 192.168.178.1
+    subnet: 255.255.255.0
+
+logger:
+
+api:
+  encryption:
+    key: "RJP49TdVQlBL5nIXnp0wHxOyacqsoxkqB8ew3h8zDyk="
+
+ota:
+  - platform: esphome
+    password: !secret ota
+
+# -------------------------------------------------------------------
+# GLOBALS (TRACK MOTOR DIRECTION)
+# -------------------------------------------------------------------
+globals:
+  - id: motor_direction
+    type: int
+    restore_value: no
+    initial_value: "0"
+    #  1 = opening (up)
+    # -1 = closing (down)
+    #  0 = stopped
+
+# -------------------------------------------------------------------
+# MOTOR LED
+# -------------------------------------------------------------------
+output:
+  - platform: gpio
+    id: motor_led
+    pin: GPIO8
+    inverted: true
+
+# -------------------------------------------------------------------
+# RELAYS + INTERNAL MOTOR SWITCHES
+# -------------------------------------------------------------------
+switch:
+  - platform: gpio
+    id: relay_dir
+    pin: GPIO21
+    restore_mode: ALWAYS_OFF
+
+  - platform: gpio
+    id: relay_power
+    pin: GPIO5
+    restore_mode: ALWAYS_OFF
+
+  # INTERNAL UP
+  - platform: template
+    id: dining_blind_up
+    internal: true
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - lambda: |-
+          id(motor_direction) = 1;
+      - switch.turn_off: relay_dir
+      - switch.turn_on: relay_power
+      - output.turn_on: motor_led
+    turn_off_action:
+      - switch.turn_off: relay_power
+      - switch.turn_off: relay_dir
+      - output.turn_off: motor_led
+
+  # INTERNAL DOWN
+  - platform: template
+    id: dining_blind_down
+    internal: true
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - lambda: |-
+          id(motor_direction) = -1;
+      - switch.turn_on: relay_dir
+      - switch.turn_on: relay_power
+      - output.turn_on: motor_led
+    turn_off_action:
+      - switch.turn_off: relay_power
+      - switch.turn_off: relay_dir
+      - output.turn_off: motor_led
+
+# -------------------------------------------------------------------
+# ENDSTOPS + TOUCH BUTTONS
+# -------------------------------------------------------------------
+binary_sensor:
+  # Hall endstops
+  - platform: gpio
+    id: dining_endstop_top
+    name: "Dining - Endstop Top"
+    pin:
+      number: GPIO10
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_on_off: 50ms
+
+  - platform: gpio
+    id: dining_endstop_bottom
+    name: "Dining - Endstop Bottom"
+    pin:
+      number: GPIO9
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_on_off: 50ms
+
+  # Touch UP button
+  - platform: gpio
+    name: "Dining - Touch Up"
+    pin: GPIO6
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: |-
+                return id(motor_direction) == -1;
+            then:
+              # Moving DOWN -> STOP
+              - cover.stop: blind_diner_cover
+            else:
+              # Otherwise -> OPEN
+              - cover.open: blind_diner_cover
+
+  # Touch DOWN button
+  - platform: gpio
+    name: "Dining - Touch Down"
+    pin: GPIO7
+    on_press:
+      then:
+        - if:
+            condition:
+              lambda: |-
+                return id(motor_direction) == 1;
+            then:
+              # Moving UP -> STOP
+              - cover.stop: blind_diner_cover
+            else:
+              # Otherwise -> CLOSE
+              - cover.close: blind_diner_cover
+
+# -------------------------------------------------------------------
+# ENDSTOP COVER
+# -------------------------------------------------------------------
+cover:
+  - platform: endstop
+    id: blind_diner_cover
+    name: "Dining Room Blinds"
+    device_class: blind
+
+    max_duration: 15s
+
+    open_action:
+      - switch.turn_on: dining_blind_up
+    open_duration: 14s
+    open_endstop: dining_endstop_top
+
+    close_action:
+      - switch.turn_on: dining_blind_down
+    close_duration: 9s
+    close_endstop: dining_endstop_bottom
+
+    stop_action:
+      - lambda: |-
+          id(motor_direction) = 0;
+      - switch.turn_off: dining_blind_up
+      - switch.turn_off: dining_blind_down
+
